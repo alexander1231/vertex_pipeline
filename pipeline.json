@@ -1,0 +1,162 @@
+{
+  "components": {
+    "comp-train-and-deploy-sdk": {
+      "executorLabel": "exec-train-and-deploy-sdk",
+      "inputDefinitions": {
+        "parameters": {
+          "bq_uri": {
+            "parameterType": "STRING"
+          },
+          "endpoint_display_name": {
+            "parameterType": "STRING"
+          },
+          "model_display_name": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "region": {
+            "parameterType": "STRING"
+          },
+          "staging_bucket": {
+            "parameterType": "STRING"
+          },
+          "target_column": {
+            "parameterType": "STRING"
+          },
+          "training_budget_hours": {
+            "defaultValue": 1.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-train-and-deploy-sdk": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_and_deploy_sdk"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform==1.66.0'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.4' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_and_deploy_sdk(\n    project_id: str,\n    region: str,\n    staging_bucket: str,\n    bq_uri: str,\n    target_column: str,\n    model_display_name: str,\n    endpoint_display_name: str,\n    training_budget_hours: float = 1.0,\n) -> str:\n    from google.cloud import aiplatform\n    import time, json\n\n    aiplatform.init(project=project_id, location=region, staging_bucket=staging_bucket)\n\n    ds = aiplatform.TabularDataset.create(\n        display_name=f\"ds-from-bq-{int(time.time())}\",\n        bq_source=bq_uri,\n    )\n\n    job = aiplatform.AutoMLTabularTrainingJob(\n        display_name=f\"automl-train-{int(time.time())}\",\n        optimization_prediction_type=\"classification\",\n        optimization_objective=\"maximize-au-roc\",\n    )\n    model = job.run(\n        dataset=ds,\n        target_column=target_column,\n        training_budget_milli_node_hours=int(training_budget_hours * 1000),\n        model_display_name=model_display_name,\n        disable_early_stopping=False,\n        sync=True,\n    )\n\n    eps = aiplatform.Endpoint.list(filter=f'display_name=\"{endpoint_display_name}\"')\n    endpoint = eps[0] if eps else aiplatform.Endpoint.create(display_name=endpoint_display_name, sync=True)\n\n    deployed = model.deploy(\n        endpoint=endpoint,\n        deployed_model_display_name=f\"{model_display_name}-deployed\",\n        traffic_percentage=100,\n        machine_type=\"n1-standard-2\",\n        min_replica_count=1,\n        max_replica_count=2,\n        sync=True,\n    )\n\n    return json.dumps({\n        \"dataset\": ds.resource_name,\n        \"model\": model.resource_name,\n        \"endpoint\": endpoint.resource_name,\n        \"deployed_model_id\": getattr(deployed, \"id\", None),\n    })\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "name": "vertex-automl-single-step-train-deploy"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "train-and-deploy-sdk": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-and-deploy-sdk"
+          },
+          "inputs": {
+            "parameters": {
+              "bq_uri": {
+                "componentInputParameter": "bq_uri"
+              },
+              "endpoint_display_name": {
+                "componentInputParameter": "endpoint_display_name"
+              },
+              "model_display_name": {
+                "componentInputParameter": "model_display_name"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "region": {
+                "componentInputParameter": "region"
+              },
+              "staging_bucket": {
+                "componentInputParameter": "staging_bucket"
+              },
+              "target_column": {
+                "componentInputParameter": "target_column"
+              },
+              "training_budget_hours": {
+                "componentInputParameter": "training_budget_hours"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "train-and-deploy-sdk"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "bq_uri": {
+          "defaultValue": "bq://tu-proyecto.tu_dataset.tu_tabla",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "endpoint_display_name": {
+          "defaultValue": "demo-endpoint",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "model_display_name": {
+          "defaultValue": "automl-model-demo",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "project_id": {
+          "defaultValue": "TU_PROYECTO",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "region": {
+          "defaultValue": "us-central1",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "staging_bucket": {
+          "defaultValue": "gs://TU_BUCKET",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "target_column": {
+          "defaultValue": "label",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "training_budget_hours": {
+          "defaultValue": 1.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.14.4"
+}
